@@ -1,5 +1,6 @@
 ## Run training:
-```python -m fastfit.train\
+```bash
+python -m fastfit.train\
 --per_device_train_batch_size 32\
 --per_device_eval_batch_size 8\
 --overwrite_output_dir\
@@ -17,9 +18,10 @@
 --train_file ../data/explanation_dataset.json\
 --validation_file ../data/explanation_dataset_test.json\
 --output_dir ./tmp/paraphrase-mpnet-base-v2\
---model_name_or_path "sentence-transformers/paraphrase-mpnet-base-v2"```
+--model_name_or_path "sentence-transformers/paraphrase-mpnet-base-v2"
+```
 
 ## Run inference:
-```
+```bash
 python -m fastfit.infer
 ```
