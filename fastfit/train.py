@@ -15,6 +15,7 @@ import torch
 import datasets
 import numpy as np
 from datasets import load_dataset, load_metric
+import argparse
 
 import transformers
 from transformers import (
@@ -1065,13 +1066,12 @@ class FastFitTrainer:
             self.trainer.push_to_hub(**kwargs)
 
 
-def main():
-    trainer = FastFitTrainer(is_command_line_mode=True)
+def main(args_dict):
+    trainer = FastFitTrainer(is_command_line_mode=True, **args_dict)
     trainer.train()
     trainer.evaluate()
     trainer.test()
     trainer.push_to_hub()
-
     # else:
     #     trainer.create_model_card(**kwargs)
 
@@ -1080,9 +1080,37 @@ def _mp_fn(index):
     # For xla_spawn (TPUs)
     main()
 
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model_name_or_path", type=str, default="sentence-transformers/paraphrase-mpnet-base-v2")
+    parser.add_argument("--train_file", type=str)
+    parser.add_argument("--validation_file", type=str)
+    parser.add_argument("--output_dir", type=str, default="./tmp/try")
+    parser.add_argument("--overwrite_output_dir", action="store_true")
+    parser.add_argument("--report_to", type=str, default="none")
+    parser.add_argument("--label_column_name", type=str, default="label")
+    parser.add_argument("--text_column_name", type=str, default="text")
+    parser.add_argument("--num_train_epochs", type=int, default=40)
+    parser.add_argument("--dataloader_drop_last", type=bool, default=True)
+    parser.add_argument("--per_device_train_batch_size", type=int, default=32)
+    parser.add_argument("--per_device_eval_batch_size", type=int, default=64)
+    parser.add_argument("--evaluation_strategy", type=str, default="steps")
+    parser.add_argument("--max_text_length", type=int, default=128)
+    parser.add_argument("--logging_steps", type=int, default=100)
+    parser.add_argument("--num_repeats", type=int, default=4)
+    parser.add_argument("--save_strategy", type=str, default="epoch")
+    parser.add_argument("--optim", type=str, default="adafactor")
+    parser.add_argument("--clf_loss_factor", type=float, default=0.1)
+    parser.add_argument("--do_train", action="store_true")
+    parser.add_argument("--fp16", action="store_true")
+    #parser.add_argument("--projection_dim", type=int, default=128)
+
+    args = parser.parse_args()
+    return vars(args)
 
 if __name__ == "__main__":
-    main()
+    args_dict = parse_args()
+    main(args_dict)
 
 __OUTPUT_DIR_ARG__ = "output_dir"
 __OUTPUTS__ = ["all_results.json"]
