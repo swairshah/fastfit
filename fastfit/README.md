@@ -25,3 +25,14 @@ python -m fastfit.train\
 ```bash
 python -m fastfit.infer
 ```
+
+## Build and run docker image:
+```
+docker build -f Dockerfile . -t fastfit
+```
+
+```
+docker run -it --runtime nvidia --gpus \"device=0,1\" --rm fastfit\
+--model_name_or_path sentence-transformers/paraphrase-mpnet-base-v2\
+--train_file train.json --validation_file val.json\
+```

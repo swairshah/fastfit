@@ -1,0 +1,4 @@
+torch
+transformers[torch]
+scikit-learn
+datasets
