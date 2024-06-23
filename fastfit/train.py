@@ -12,6 +12,7 @@ from collections import Counter, defaultdict
 from typing import Optional
 
 import torch
+from torch.nn.parallel.data_parallel import DataParallel
 import datasets
 import numpy as np
 from datasets import load_dataset, load_metric
@@ -28,13 +29,14 @@ from transformers import (
     TrainingArguments,
     default_data_collator,
     set_seed,
+    TrainerCallback,
 )
 from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils.versions import require_version
 
 from transformers.integrations import INTEGRATION_TO_CALLBACK
-from .modeling import ConfigArguments
-from .modeling import FastFitTrainable, FastFit, FastFitConfig
+from modeling import ConfigArguments
+from modeling import FastFitTrainable, FastFit, FastFitConfig
 
 INTEGRATION_TO_CALLBACK["clearml"] = INTEGRATION_TO_CALLBACK["tensorboard"]
 
@@ -875,17 +877,26 @@ class FastFitTrainer:
     def set_trainer(self):
         metric = load_metric(self.data_args.metric_name, experiment_id=uuid.uuid4())
 
-        # You can define your custom compute_metrics function. It takes an `EvalPrediction` object (a namedtuple with a
-        # predictions and label_ids field) and has to return a dictionary string to float.
         def compute_metrics(p: EvalPrediction):
-            predictions = (
-                p.predictions[0] if isinstance(p.predictions, tuple) else p.predictions
-            )
+            if isinstance(p.predictions, tuple):
+                embeddings = p.predictions[1]
+                predictions = p.predictions[0]
+            else:
+                predictions = p.predictions
             predictions = (
                 np.squeeze(predictions)
                 if self.is_regression
                 else np.argmax(predictions, axis=1)
             )
+
+            #epoch = self.trainer.state.epoch
+            #step = self.trainer.state.global_step
+
+            #filename = f'predictions_epoch_{epoch:.2f}_step_{step}.txt'
+            #with open(filename, 'w') as f:
+            #    for pred in predictions:
+            #        f.write(f'{pred}\n')
+
             references = p.label_ids
             return metric.compute(predictions=predictions, references=references)
 
@@ -908,6 +919,7 @@ class FastFitTrainer:
             "doc_attention_mask",
         ]
 
+        logging_callback = CustomLoggingCallback(self.model, self.tokenizer, self.eval_dataset)
         self.trainer = Trainer(
             model=self.model,
             args=self.training_args,
@@ -916,6 +928,7 @@ class FastFitTrainer:
             compute_metrics=compute_metrics,
             tokenizer=self.tokenizer,
             data_collator=data_collator,
+            callbacks=[logging_callback],
         )
 
     def __init__(
@@ -1020,6 +1033,7 @@ class FastFitTrainer:
 
             return metrics
 
+
     def test(self):
         metrics = None
         if self.training_args.do_predict:
@@ -1065,6 +1079,62 @@ class FastFitTrainer:
         if self.training_args.push_to_hub:
             self.trainer.push_to_hub(**kwargs)
 
+class CustomLoggingCallback(TrainerCallback):
+    def __init__(self, model, tokenizer, eval_dataset):
+        self.model = model
+        self.tokenizer = tokenizer
+        self.eval_dataset = eval_dataset
+
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        #if state.global_step % 100 == 0:  # Every 100 steps
+        device = self.model.device
+        with torch.no_grad():
+            self.model.eval()
+            inputs = {k: torch.tensor(self.eval_dataset[k]).to(device)\
+                for k in ["query_input_ids", "query_attention_mask", "doc_input_ids", "doc_attention_mask"]}
+        
+            embeddings = self.model.encode(**inputs)[0].pooler_output.detach().cpu().numpy()
+
+            epoch = state.epoch
+            step = state.global_step
+
+            filename = f'history/preds_{epoch:.2f}_step_{step}.txt'
+            with open(filename, 'w') as f:
+                for i, data in enumerate(self.eval_dataset):
+                    f.write(json.dumps({"text" : data['text'], 
+                                "label_id" : data['label'],
+                                "label" : self.model.config.id2label[data['label']],
+                                "embedding" : embeddings[i].tolist()}))
+                    f.write('\n')
+
+
+class CustomTrainer(Trainer):
+
+    def predict(self, predict_dataset, ignore_keys=None, metric_key_prefix=""):
+        super().predict(predict_dataset, ignore_keys=ignore_keys, metric_key_prefix=metric_key_prefix)
+
+    def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys=None):
+        loss, logits, labels = super().prediction_step(model, inputs, prediction_loss_only, ignore_keys)
+        # Generate embeddings
+        model.eval()
+        if type(model) == DataParallel:
+            with torch.no_grad():
+                embeddings = model.module.encode(
+                    query_input_ids = inputs['query_input_ids'],
+                    query_attention_mask = inputs['query_attention_mask'],
+                    doc_input_ids = inputs['doc_input_ids'],
+                    doc_attention_mask = inputs['doc_attention_mask']
+                )[0].pooler_output
+        else:
+            with torch.no_grad():
+                embeddings = model.encode(
+                    query_input_ids = inputs['query_input_ids'],
+                    query_attention_mask = inputs['query_attention_mask'],
+                    doc_input_ids = inputs['doc_input_ids'],
+                    doc_attention_mask = inputs['doc_attention_mask']
+                )[0].pooler_output
+
+        return loss, (logits, embeddings), labels
 
 def main(args_dict):
     trainer = FastFitTrainer(is_command_line_mode=True, **args_dict)
@@ -1091,7 +1161,7 @@ def parse_args():
     parser.add_argument("--label_column_name", type=str, default="label")
     parser.add_argument("--text_column_name", type=str, default="text")
     parser.add_argument("--num_train_epochs", type=int, default=40)
-    parser.add_argument("--dataloader_drop_last", type=bool, default=True)
+    #parser.add_argument("--dataloader_drop_last", type=bool, default=True)
     parser.add_argument("--per_device_train_batch_size", type=int, default=32)
     parser.add_argument("--per_device_eval_batch_size", type=int, default=64)
     parser.add_argument("--evaluation_strategy", type=str, default="steps")
